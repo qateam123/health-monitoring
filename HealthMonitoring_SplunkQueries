@@ -1,0 +1,150 @@
+---~~~###SPLUNK QUERIES###~~~---
+###These are the SPLUNK queries used to create the health monitoring dashboard and run alerts###
+
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+################################################################################################################################################################################################################################################
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+---~~~###SLACK ALERT###~~~---
+###This Slack alert runs every 2 minutes, so that any failures in the Heart beat system are picked up within 2 minutes of failing.
+The Notification is configured to send to Slack at 2 or more failure in a period of time###
+
+index=edc_*  [search index=edc_rrm* tx_id ru_ref="78100008100"
+| append [stats count
+| eval tx_id="x"
+| fields tx_id ]
+| return 1000 tx_id]
+| transaction tx_id startswith="EQ SURVEY
+| opening eq survey" endswith="receiptType=COMPLETED" keepevicted=True
+| dedup tx_id
+| search closed_txn=0 OR duration > 120
+| eval startTime=_time
+| eval endTime=_time+duration
+|convert ctime(startTime) ctime(endTime)
+| eval closed_txn = case(closed_txn< 1, case(1=1,"FAIL"), closed_txn=1, case(duration>120, "EXCEEDED TIME LIMIT", 1=1, "SUCCESS"))
+| rename tx_id as "transactionId", closed_txn as "successStatus"
+| table transactionId successStatus event startTime endTime duration
+
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+---~~~###EMAIL ALERT###~~~---
+###Similar to the Slack alert, runs every 2 minutes, so that any failures in the Heart beat system are picked up within 2 minutes of failing.
+The Notification is configured to send an email at 3 or more failure in a period of time###
+
+index=edc_*  [search index=edc_rrm* tx_id ru_ref="78100008100" earliest=-20m latest = -2m
+| append [stats count
+| eval tx_id="x"
+| fields tx_id ]
+| return 1000 tx_id]
+| transaction tx_id startswith="EQ SURVEY
+| opening eq survey" endswith="receiptType=COMPLETED" keepevicted=True
+| dedup tx_id
+| search closed_txn=0 OR duration > 120
+| eval startTime=_time
+| eval endTime=_time+duration
+|convert ctime(startTime) ctime(endTime)
+| eval closed_txn = case(closed_txn< 1, case(1=1,"FAIL"), closed_txn=1, case(duration>120, "EXCEEDED TIME LIMIT", 1=1, "SUCCESS"))
+| rename tx_id as "transactionId", closed_txn as "successStatus"
+| table transactionId successStatus event startTime endTime duration
+
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+################################################################################################################################################################################################################################################
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+---~~~###DASHBOARD###~~~---
+
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+---~~~###STATUS BY TIME###~~~---
+###This query produce a time chart that shows the count of SUCCESS, EXCEEDED TIME LIMIT and FAIL transactions over an adjustable time frame###
+
+index=edc_*_$env$_* INFO [search index=edc_rrm* tx_id ru_ref="78100008100"
+| return 1000 tx_id]
+| transaction tx_id startswith="EQ SURVEY
+| opening eq survey" endswith="receiptType=COMPLETED" keepevicted=True
+| dedup tx_id
+| eval startTime=_time
+| eval endTime=_time+duration
+| convert ctime(startTime) ctime(endTime)
+| eval closed_txn = case(closed_txn&lt; 1, case(1=1,"FAIL"), closed_txn=1, case(duration&gt;120, "EXCEEDED TIME LIMIT", 1=1, "SUCCESS"))
+| rename tx_id as "transactionId", closed_txn as "Status"
+|timechart count by Status
+
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+---~~~###FAILURES BY TIME###~~~---
+###This query is similar to STATUS BY TIME, a time chart that shows the count of just EXCEEDED TIME LIMIT and FAIL transactions over an adjustable time frame###
+
+index=edc_*_$env$_* INFO  [search index=edc_rrm* tx_id ru_ref="78100008100" latest = -2m
+| append [stats count
+| eval tx_id="x"
+| fields tx_id ]
+| return 1000 tx_id]
+| transaction tx_id startswith="EQ SURVEY
+| opening eq survey" endswith="receiptType=COMPLETED" keepevicted=True
+| dedup tx_id
+| search closed_txn = 0 OR duration &gt; 120
+| eval startTime=_time
+| eval endTime=_time+duration
+| convert ctime(startTime) ctime(endTime)
+| eval closed_txn = if(closed_txn = 1, "EXCEEDED TIME LIMIT", "FAIL")
+|rename tx_id as "transactionId", closed_txn as "successStatus"
+| timechart count by successStatus
+
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+---~~~###FAILED TRANSACTION COUNT FOR PREVIOUS 24 HOURS###~~~---
+###This query is similar to FAILURES BY TIME, but just over the previous 24 hour period.
+A time chart that shows the count of just EXCEEDED TIME LIMIT and FAIL transactions over 24 hours###
+
+index=edc_*_$env$_* INFO  [search index=edc_rrm* tx_id ru_ref="78100008100" latest = -2m
+| append [stats count
+| eval tx_id="x"
+| fields tx_id ]
+| return 1000 tx_id]
+| transaction tx_id startswith="EQ SURVEY
+| opening eq survey" endswith="receiptType=COMPLETED" keepevicted=True
+| dedup tx_id
+| search closed_txn = 0 OR duration & gt; 120
+| eval startTime=_time
+| eval endTime=_time+duration
+| convert ctime(startTime) ctime(endTime)
+| eval closed_txn = if(closed_txn = 1, "EXCEEDED TIME LIMIT", "FAIL")
+|rename tx_id as "transactionId", closed_txn as "successStatus"
+| timechart span=1h count by successStatus
+
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+---~~~###AVERAGE DURATION FOR PREVIOUS 1000 TRANSACTIONS###~~~---
+###This query gives a time chart, with the average duration from "launch EQ Survey to receipt type COMPLETED" only for completed transaction (SUCCESS and EXCEEDED TIME LIMIT).
+For previous 1000 transactions or an adjust time frame###
+
+index=edc_*_$env$_* INFO [search index=edc_rrm* tx_id ru_ref="78100008100"
+| return 1000 tx_id]
+| transaction tx_id startswith="EQ SURVEY
+| opening eq survey" endswith="receiptType=COMPLETED" keepevicted=True
+|search duration & gt;0 and duration &lt;1000 and closed_txn=1
+| dedup tx_id
+| timechart span=2h avg(duration)
+
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+---~~~###ALL FAILED TRANSACTIONS###~~~---
+###This query produce a table of all failed transactions (i.e FAIL and EXCEEDED TIME LIMIT),
+with columns "transactionId", "successStatus", "receiptType", "startTime", "endTime", "duration", "event"###
+
+index=edc_*_$env$_* INFO  [search index=edc_rrm* tx_id ru_ref="78100008100" latest = -2m
+| append [stats count
+| eval tx_id="x"
+| fields tx_id ]
+| return 1000 tx_id]
+| transaction tx_id startswith="EQ SURVEY
+| opening eq survey" endswith="receiptType=COMPLETED" keepevicted=True
+| dedup tx_id
+| search closed_txn = 0 OR duration & gt; 120
+| eval startTime=_time
+| eval endTime=_time+duration
+| convert ctime(startTime) ctime(endTime)
+| eval closed_txn = if(closed_txn = 1, "EXCEEDED TIME LIMIT", "FAIL")
+|rename tx_id as "transactionId", closed_txn as "successStatus"
+| table transactionId successStatus receiptType startTime endTime duration event
